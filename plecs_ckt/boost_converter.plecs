@@ -76,7 +76,7 @@ Plecs {
       Type          Diode
       Name          "D1"
       Show          off
-      Position      [240, 95]
+      Position      [345, 95]
       Direction     right
       Flipped       on
       LabelPosition north
@@ -173,7 +173,7 @@ Plecs {
       Type          Resistor
       Name          "R1"
       Show          off
-      Position      [340, 140]
+      Position      [445, 140]
       Direction     down
       Flipped       off
       LabelPosition west
@@ -187,13 +187,13 @@ Plecs {
       Type          Capacitor
       Name          "C1"
       Show          off
-      Position      [285, 140]
+      Position      [390, 140]
       Direction     down
       Flipped       on
       LabelPosition west
       Parameter {
         Variable      "C"
-        Value         "200e-6"
+        Value         "100e-6"
         Show          on
       }
       Parameter {
@@ -215,7 +215,7 @@ Plecs {
       Type          Voltmeter
       Name          "Vm1"
       Show          off
-      Position      [380, 140]
+      Position      [485, 140]
       Direction     up
       Flipped       off
       LabelPosition west
@@ -224,7 +224,7 @@ Plecs {
       Type          Scope
       Name          "Scope"
       Show          on
-      Position      [440, 75]
+      Position      [545, 75]
       Direction     up
       Flipped       off
       LabelPosition south
@@ -350,15 +350,15 @@ Plecs {
       SrcTerminal   2
       Points        [195, 180]
       Branch {
-        Points        [285, 180]
+        Points        [390, 180]
         Branch {
-          Points        [340, 180]
+          Points        [445, 180]
           Branch {
             DstComponent  "R1"
             DstTerminal   1
           }
           Branch {
-            Points        [380, 180]
+            Points        [485, 180]
             DstComponent  "Vm1"
             DstTerminal   2
           }
@@ -378,11 +378,11 @@ Plecs {
       Type          Wire
       SrcComponent  "C1"
       SrcTerminal   1
-      Points        [285, 95]
+      Points        [390, 95]
       Branch {
-        Points        [340, 95]
+        Points        [445, 95]
         Branch {
-          Points        [380, 95]
+          Points        [485, 95]
           DstComponent  "Vm1"
           DstTerminal   1
         }
@@ -444,7 +444,7 @@ Plecs {
       Type          Signal
       SrcComponent  "Vm1"
       SrcTerminal   3
-      Points        [400, 140; 400, 80]
+      Points        [505, 140; 505, 80]
       DstComponent  "Scope"
       DstTerminal   2
     }
@@ -455,4 +455,4 @@ Plecs {
     } 
   }
 }
-DemoSignature "qtNgXmcuNY/8hs4skaHZ3OLrChYAgAfXrqW/Z0631Pk="
+DemoSignature "7SpBz+3CPYfEZfuvHai/ISwkvkuAKJq7nfN6PsIQJwM="
