@@ -346,26 +346,26 @@ const mcSource = (label: string): ComponentSymbol => circleSource(MC, label);
 // ════════════════════════════════════════════
 
 const sgGoto = (tag: string): ComponentSymbol => {
-  const tw = Math.max(30, tag.length * 6 + 16);
+  const tw = Math.max(18, tag.length * 5 + 8);
   const hw = tw / 2;
   return {
     svgBody: `
-      <polygon points="${-hw},-10 ${hw - 8},-10 ${hw},0 ${hw - 8},10 ${-hw},10" fill="${W}" stroke="${SG}" stroke-width="1.5"/>
-      <text x="-4" y="4" font-size="9" text-anchor="middle" fill="${SG}" class="symbol-text">${escapeXml(tag)}</text>
+      <polygon points="${-hw},-7 ${hw - 6},-7 ${hw},0 ${hw - 6},7 ${-hw},7" fill="${W}" stroke="${SG}" stroke-width="1.2"/>
+      <text x="-3" y="3" font-size="7" text-anchor="middle" fill="${SG}" class="symbol-text">${escapeXml(tag)}</text>
     `,
-    terminals: [{ x: -hw, y: 0 }], label: tag, width: tw, height: 24,
+    terminals: [{ x: -hw, y: 0 }], label: tag, width: tw, height: 14,
   };
 };
 
 const sgFrom = (tag: string): ComponentSymbol => {
-  const tw = Math.max(30, tag.length * 6 + 16);
+  const tw = Math.max(18, tag.length * 5 + 8);
   const hw = tw / 2;
   return {
     svgBody: `
-      <polygon points="${-hw},0 ${-hw + 8},-10 ${hw},-10 ${hw},10 ${-hw + 8},10" fill="${W}" stroke="${SG}" stroke-width="1.5"/>
-      <text x="4" y="4" font-size="9" text-anchor="middle" fill="${SG}" class="symbol-text">${escapeXml(tag)}</text>
+      <polygon points="${-hw},0 ${-hw + 6},-7 ${hw},-7 ${hw},7 ${-hw + 6},7" fill="${W}" stroke="${SG}" stroke-width="1.2"/>
+      <text x="3" y="3" font-size="7" text-anchor="middle" fill="${SG}" class="symbol-text">${escapeXml(tag)}</text>
     `,
-    terminals: [{ x: hw, y: 0 }], label: tag, width: tw, height: 24,
+    terminals: [{ x: -hw, y: 0 }], label: tag, width: tw, height: 14,
   };
 };
 
@@ -403,11 +403,15 @@ const sgIntegrator = (): ComponentSymbol => signalBlock('1/s');
 
 const sgScope = (): ComponentSymbol => ({
   svgBody: `
-    <rect x="-15" y="-12" width="30" height="24" rx="2" fill="${W}" stroke="${SG}" stroke-width="1.5"/>
-    <polyline points="-10,4 -5,4 -3,-6 1,6 4,-4 7,4 10,4" fill="none" stroke="${SG}" stroke-width="1"/>
+    <rect x="-17" y="-14" width="34" height="28" rx="3" fill="${W}" stroke="${SG}" stroke-width="1.5"/>
+    <rect x="-13" y="-10" width="26" height="20" rx="1" fill="#f0f0f0" stroke="${SG}" stroke-width="0.8"/>
+    <line x1="-13" y1="2" x2="13" y2="2" stroke="#ccc" stroke-width="0.4"/>
+    <line x1="0" y1="-10" x2="0" y2="10" stroke="#ccc" stroke-width="0.4"/>
+    <polyline points="-10,2 -6,2 -4,-6 0,6 3,-4 6,2 10,2" fill="none" stroke="#22aa44" stroke-width="1.2"/>
+    <circle cx="14" cy="11" r="1.5" fill="none" stroke="${SG}" stroke-width="0.8"/>
   `,
-  terminals: [{ x: -8, y: -12 }, { x: 8, y: -12 }],
-  label: 'Scope', width: 34, height: 28,
+  terminals: [{ x: -8, y: -14 }, { x: 8, y: -14 }],
+  label: 'Scope', width: 38, height: 32,
 });
 
 const sgPulseGen = (): ComponentSymbol => sourceBlock('PWM',

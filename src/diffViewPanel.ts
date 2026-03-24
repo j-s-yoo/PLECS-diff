@@ -1,35 +1,56 @@
 /**
  * Webview panel for displaying PLECS circuit diffs side-by-side
- * with navigation between individual changes.
+ * with in-panel commit selection and navigation between changes.
  */
 
 import * as vscode from 'vscode';
-import { PlecsCircuit } from './plecsParser';
-import { DiffResult } from './diffEngine';
+import * as path from 'path';
+import { parsePlecsFile } from './plecsParser';
+import { DiffResult, diffCircuits } from './diffEngine';
 import { renderCircuitSvg } from './circuitRenderer';
+import { GitCommit, getFileAtCommit, getWorkingCopy } from './extension';
+
+interface CommitOption {
+  hash: string;
+  label: string;
+  detail: string;
+}
 
 export class PlecsDiffPanel {
   public static currentPanel: PlecsDiffPanel | undefined;
   private readonly panel: vscode.WebviewPanel;
   private disposables: vscode.Disposable[] = [];
 
-  private rootDiff: DiffResult;
+  private cwd: string;
+  private filePath: string;
+  private commitOptions: CommitOption[];
+
+  private oldHash: string | null = null;
+  private newHash: string | null = null;
+  private rootDiff: DiffResult | null = null;
   private currentChangeIndex: number = 0;
-  private oldCommitLabel: string;
-  private newCommitLabel: string;
-  /** Stack of subsystem names we've drilled into */
+  private oldCommitLabel: string = '';
+  private newCommitLabel: string = '';
   private subsystemPath: string[] = [];
 
   private constructor(
     panel: vscode.WebviewPanel,
-    diff: DiffResult,
-    oldCommitLabel: string,
-    newCommitLabel: string,
+    cwd: string,
+    filePath: string,
+    commits: GitCommit[],
   ) {
     this.panel = panel;
-    this.rootDiff = diff;
-    this.oldCommitLabel = oldCommitLabel;
-    this.newCommitLabel = newCommitLabel;
+    this.cwd = cwd;
+    this.filePath = filePath;
+
+    this.commitOptions = [
+      { hash: 'WORKING', label: 'Working Copy', detail: 'Current file on disk' },
+      ...commits.map(c => ({
+        hash: c.hash,
+        label: `${c.shortHash}`,
+        detail: `${c.date.substring(0, 10)} — ${c.message}`,
+      })),
+    ];
 
     this.panel.onDidDispose(() => this.dispose(), null, this.disposables);
     this.panel.webview.onDidReceiveMessage(
@@ -38,11 +59,11 @@ export class PlecsDiffPanel {
       this.disposables,
     );
 
-    this.updateContent();
+    this.showCommitSelector();
   }
 
-  /** Resolve the current diff based on subsystemPath */
-  private get activeDiff(): DiffResult {
+  private get activeDiff(): DiffResult | null {
+    if (!this.rootDiff) return null;
     let diff = this.rootDiff;
     for (const name of this.subsystemPath) {
       const sub = diff.subDiffs.get(name);
@@ -52,28 +73,33 @@ export class PlecsDiffPanel {
     return diff;
   }
 
-  public static show(
-    extensionUri: vscode.Uri,
-    diff: DiffResult,
-    oldCommitLabel: string,
-    newCommitLabel: string,
-  ) {
+  public static show(cwd: string, filePath: string, commits: GitCommit[]) {
     const column = vscode.ViewColumn.One;
 
     if (PlecsDiffPanel.currentPanel) {
-      PlecsDiffPanel.currentPanel.rootDiff = diff;
-      PlecsDiffPanel.currentPanel.oldCommitLabel = oldCommitLabel;
-      PlecsDiffPanel.currentPanel.newCommitLabel = newCommitLabel;
-      PlecsDiffPanel.currentPanel.currentChangeIndex = 0;
+      PlecsDiffPanel.currentPanel.cwd = cwd;
+      PlecsDiffPanel.currentPanel.filePath = filePath;
+      PlecsDiffPanel.currentPanel.commitOptions = [
+        { hash: 'WORKING', label: 'Working Copy', detail: 'Current file on disk' },
+        ...commits.map(c => ({
+          hash: c.hash,
+          label: `${c.shortHash}`,
+          detail: `${c.date.substring(0, 10)} — ${c.message}`,
+        })),
+      ];
+      PlecsDiffPanel.currentPanel.oldHash = null;
+      PlecsDiffPanel.currentPanel.newHash = null;
+      PlecsDiffPanel.currentPanel.rootDiff = null;
       PlecsDiffPanel.currentPanel.subsystemPath = [];
-      PlecsDiffPanel.currentPanel.updateContent();
+      PlecsDiffPanel.currentPanel.currentChangeIndex = 0;
+      PlecsDiffPanel.currentPanel.showCommitSelector();
       PlecsDiffPanel.currentPanel.panel.reveal(column);
       return;
     }
 
     const panel = vscode.window.createWebviewPanel(
       'plecsDiff',
-      `PLECS Diff: ${diff.newCircuit.name}`,
+      `PLECS Diff: ${path.basename(filePath)}`,
       column,
       {
         enableScripts: true,
@@ -81,76 +107,296 @@ export class PlecsDiffPanel {
       },
     );
 
-    PlecsDiffPanel.currentPanel = new PlecsDiffPanel(panel, diff, oldCommitLabel, newCommitLabel);
+    PlecsDiffPanel.currentPanel = new PlecsDiffPanel(panel, cwd, filePath, commits);
   }
 
-  private handleMessage(message: { command: string; index?: number; name?: string }) {
-    const diff = this.activeDiff;
+  private async handleMessage(message: any) {
     switch (message.command) {
-      case 'prev':
-        if (diff.changes.length > 0) {
+      case 'selectCommits': {
+        const oldHash = message.oldHash;
+        const newHash = message.newHash;
+        if (!oldHash || !newHash) {
+          this.showCommitSelector('Please select both OLD and NEW commits.');
+          return;
+        }
+        if (oldHash === newHash) {
+          this.showCommitSelector('Same version selected for both sides. Pick different commits.');
+          return;
+        }
+        await this.loadDiff(oldHash, newHash);
+        break;
+      }
+      case 'changeCommits':
+        this.showCommitSelector();
+        break;
+      case 'prev': {
+        const diff = this.activeDiff;
+        if (diff && diff.changes.length > 0) {
           this.currentChangeIndex =
             (this.currentChangeIndex - 1 + diff.changes.length) % diff.changes.length;
-          this.updateContent();
+          this.showDiff();
         }
         break;
-      case 'next':
-        if (diff.changes.length > 0) {
+      }
+      case 'next': {
+        const diff = this.activeDiff;
+        if (diff && diff.changes.length > 0) {
           this.currentChangeIndex = (this.currentChangeIndex + 1) % diff.changes.length;
-          this.updateContent();
+          this.showDiff();
         }
         break;
-      case 'goto':
-        if (message.index !== undefined && message.index >= 0 && message.index < diff.changes.length) {
+      }
+      case 'goto': {
+        const diff = this.activeDiff;
+        if (diff && message.index !== undefined && message.index >= 0 && message.index < diff.changes.length) {
           this.currentChangeIndex = message.index;
-          this.updateContent();
+          this.showDiff();
         }
         break;
-      case 'enterSub':
-        if (message.name && diff.subDiffs.has(message.name)) {
+      }
+      case 'enterSub': {
+        const diff = this.activeDiff;
+        if (diff && message.name && diff.subDiffs.has(message.name)) {
           this.subsystemPath.push(message.name);
           this.currentChangeIndex = 0;
-          this.updateContent();
+          this.showDiff();
         }
         break;
+      }
       case 'goBack':
         if (this.subsystemPath.length > 0) {
           this.subsystemPath.pop();
           this.currentChangeIndex = 0;
-          this.updateContent();
+          this.showDiff();
         }
         break;
       case 'goToRoot':
         this.subsystemPath = [];
         this.currentChangeIndex = 0;
-        this.updateContent();
+        this.showDiff();
         break;
     }
   }
 
-  private updateContent() {
+  private async loadDiff(oldHash: string, newHash: string) {
+    this.oldHash = oldHash;
+    this.newHash = newHash;
+    this.subsystemPath = [];
+    this.currentChangeIndex = 0;
+
+    const oldOpt = this.commitOptions.find(c => c.hash === oldHash);
+    const newOpt = this.commitOptions.find(c => c.hash === newHash);
+    this.oldCommitLabel = oldOpt ? (oldOpt.hash === 'WORKING' ? 'Working Copy' : `${oldOpt.label} (${oldOpt.detail})`) : oldHash;
+    this.newCommitLabel = newOpt ? (newOpt.hash === 'WORKING' ? 'Working Copy' : `${newOpt.label} (${newOpt.detail})`) : newHash;
+
+    // Show loading state
+    this.panel.webview.html = this.getLoadingHtml();
+
+    try {
+      const oldContent = oldHash === 'WORKING'
+        ? await getWorkingCopy(this.filePath)
+        : await getFileAtCommit(this.cwd, this.filePath, oldHash);
+      const newContent = newHash === 'WORKING'
+        ? await getWorkingCopy(this.filePath)
+        : await getFileAtCommit(this.cwd, this.filePath, newHash);
+
+      const oldCircuit = parsePlecsFile(oldContent);
+      const newCircuit = parsePlecsFile(newContent);
+      this.rootDiff = diffCircuits(oldCircuit, newCircuit);
+
+      this.showDiff();
+    } catch (err: any) {
+      vscode.window.showErrorMessage(`Error loading diff: ${err.message}`);
+      this.showCommitSelector(`Error: ${err.message}`);
+    }
+  }
+
+  private showCommitSelector(errorMsg?: string) {
+    this.panel.webview.html = this.getCommitSelectorHtml(errorMsg);
+  }
+
+  private showDiff() {
     const diff = this.activeDiff;
+    if (!diff) return;
 
-    const oldSvg = renderCircuitSvg(
-      diff.oldCircuit,
-      diff,
-      'old',
-      this.currentChangeIndex,
-    );
-    const newSvg = renderCircuitSvg(
-      diff.newCircuit,
-      diff,
-      'new',
-      this.currentChangeIndex,
-    );
-
+    const oldSvg = renderCircuitSvg(diff.oldCircuit, diff, 'old', this.currentChangeIndex);
+    const newSvg = renderCircuitSvg(diff.newCircuit, diff, 'new', this.currentChangeIndex);
     const totalChanges = diff.changes.length;
     const currentChange = totalChanges > 0 ? diff.changes[this.currentChangeIndex] : null;
 
-    this.panel.webview.html = this.getHtml(oldSvg, newSvg, totalChanges, currentChange, diff);
+    this.panel.webview.html = this.getDiffHtml(oldSvg, newSvg, totalChanges, currentChange, diff);
   }
 
-  private getHtml(
+  // ── Commit selector page ──
+
+  private getCommitSelectorHtml(errorMsg?: string): string {
+    const fileName = path.basename(this.filePath);
+    const relPath = path.relative(this.cwd, this.filePath);
+
+    const commitRowsHtml = this.commitOptions.map(c => {
+      const isWorking = c.hash === 'WORKING';
+      const icon = isWorking ? '📄' : '⬤';
+      const hashDisplay = isWorking ? '' : `<span class="commit-hash">${escapeHtml(c.label)}</span>`;
+      return `<div class="commit-row" data-hash="${escapeHtml(c.hash)}">
+        <input type="radio" name="oldCommit" value="${escapeHtml(c.hash)}" class="radio-old" title="Select as OLD">
+        <input type="radio" name="newCommit" value="${escapeHtml(c.hash)}" class="radio-new" title="Select as NEW">
+        <span class="commit-icon">${icon}</span>
+        ${hashDisplay}
+        <span class="commit-detail">${escapeHtml(c.detail)}</span>
+      </div>`;
+    }).join('');
+
+    return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<style>
+  :root {
+    --bg: #1e1e1e; --fg: #cccccc; --border: #404040; --accent: #569cd6;
+    --added: #4ec9b0; --removed: #f44747;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--bg); color: var(--fg);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-size: 13px; height: 100vh; display: flex; flex-direction: column;
+  }
+  .selector-header {
+    padding: 16px 24px; background: #252526; border-bottom: 1px solid var(--border);
+  }
+  .selector-header h1 { font-size: 18px; font-weight: 600; margin-bottom: 4px; }
+  .selector-header .file-path { font-size: 12px; color: #888; }
+  .error-msg { color: var(--removed); font-size: 12px; margin-top: 8px; }
+
+  .column-headers {
+    display: flex; align-items: center; padding: 8px 24px; background: #2a2a2a;
+    border-bottom: 1px solid var(--border); font-size: 12px; font-weight: 600;
+  }
+  .col-old { width: 32px; text-align: center; color: var(--removed); }
+  .col-new { width: 32px; text-align: center; color: var(--added); }
+  .col-rest { flex: 1; padding-left: 8px; }
+
+  .commit-list { flex: 1; overflow-y: auto; }
+  .commit-row {
+    display: flex; align-items: center; padding: 6px 24px;
+    border-bottom: 1px solid #333; cursor: pointer; font-size: 12px;
+  }
+  .commit-row:hover { background: #2a2d2e; }
+  .radio-old, .radio-new { width: 32px; flex-shrink: 0; cursor: pointer; accent-color: var(--accent); }
+  .commit-icon { margin: 0 6px; font-size: 10px; color: #888; }
+  .commit-hash {
+    font-family: 'SF Mono', Menlo, Monaco, Consolas, monospace;
+    color: var(--accent); margin-right: 8px; font-size: 12px;
+  }
+  .commit-detail { flex: 1; color: #aaa; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  .selector-footer {
+    padding: 12px 24px; background: #252526; border-top: 1px solid var(--border);
+    display: flex; align-items: center; gap: 12px;
+  }
+  .compare-btn {
+    background: var(--accent); color: #fff; border: none; padding: 8px 24px;
+    font-size: 14px; font-weight: 600; border-radius: 4px; cursor: pointer;
+  }
+  .compare-btn:hover { background: #4a8cc7; }
+  .compare-btn:disabled { opacity: 0.4; cursor: default; }
+  .selection-summary { font-size: 12px; color: #888; }
+</style>
+</head>
+<body>
+
+<div class="selector-header">
+  <h1>PLECS Diff Viewer</h1>
+  <div class="file-path">${escapeHtml(relPath)}</div>
+  ${errorMsg ? `<div class="error-msg">${escapeHtml(errorMsg)}</div>` : ''}
+</div>
+
+<div class="column-headers">
+  <span class="col-old">OLD</span>
+  <span class="col-new">NEW</span>
+  <span class="col-rest">Commit</span>
+</div>
+
+<div class="commit-list">
+  ${commitRowsHtml}
+</div>
+
+<div class="selector-footer">
+  <button class="compare-btn" id="compare-btn" disabled>Compare</button>
+  <span class="selection-summary" id="selection-summary">Select OLD and NEW versions to compare</span>
+</div>
+
+<script>
+  const vscode = acquireVsCodeApi();
+  let oldHash = null, newHash = null;
+
+  function updateSummary() {
+    const btn = document.getElementById('compare-btn');
+    const summary = document.getElementById('selection-summary');
+    if (oldHash && newHash && oldHash !== newHash) {
+      btn.disabled = false;
+      summary.textContent = 'Ready to compare';
+    } else if (oldHash && newHash && oldHash === newHash) {
+      btn.disabled = true;
+      summary.textContent = 'Cannot compare same version';
+    } else {
+      btn.disabled = true;
+      const parts = [];
+      if (!oldHash) parts.push('OLD');
+      if (!newHash) parts.push('NEW');
+      summary.textContent = 'Select ' + parts.join(' and ') + ' version' + (parts.length > 1 ? 's' : '');
+    }
+  }
+
+  document.querySelectorAll('.radio-old').forEach(r => {
+    r.addEventListener('change', () => { oldHash = r.value; updateSummary(); });
+  });
+  document.querySelectorAll('.radio-new').forEach(r => {
+    r.addEventListener('change', () => { newHash = r.value; updateSummary(); });
+  });
+
+  document.getElementById('compare-btn').addEventListener('click', () => {
+    vscode.postMessage({ command: 'selectCommits', oldHash, newHash });
+  });
+
+  // Double-click a row to quick-select it as NEW (and first un-selected as OLD)
+  document.querySelectorAll('.commit-row').forEach(row => {
+    row.addEventListener('dblclick', () => {
+      const hash = row.dataset.hash;
+      if (!oldHash) {
+        row.querySelector('.radio-old').checked = true;
+        oldHash = hash;
+      } else if (!newHash) {
+        row.querySelector('.radio-new').checked = true;
+        newHash = hash;
+      }
+      updateSummary();
+      if (oldHash && newHash && oldHash !== newHash) {
+        vscode.postMessage({ command: 'selectCommits', oldHash, newHash });
+      }
+    });
+  });
+</script>
+</body>
+</html>`;
+  }
+
+  // ── Loading page ──
+
+  private getLoadingHtml(): string {
+    return `<!DOCTYPE html>
+<html><head><style>
+  body { background: #1e1e1e; color: #ccc; display: flex; align-items: center; justify-content: center; height: 100vh; font-family: sans-serif; }
+  .spinner { border: 3px solid #333; border-top: 3px solid #569cd6; border-radius: 50%; width: 32px; height: 32px; animation: spin 0.8s linear infinite; margin-right: 12px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style></head>
+<body><div class="spinner"></div><span>Loading diff...</span></body>
+</html>`;
+  }
+
+  // ── Diff view page ──
+
+  private getDiffHtml(
     oldSvg: string,
     newSvg: string,
     totalChanges: number,
@@ -168,7 +414,6 @@ export class PlecsDiffPanel {
       })
       .join('');
 
-    // Build subsystem list from subDiffs (includes subsystems with no changes)
     const subsystemNames = Array.from(diff.subDiffs.keys());
     const subsystemsInChangeList = new Set(
       diff.changes.filter(c => c.type === 'subsystem-changed').map(c => c.componentName),
@@ -181,11 +426,6 @@ export class PlecsDiffPanel {
         ).join('')
       : '';
 
-    // Breadcrumb for subsystem navigation
-    const breadcrumbParts = ['Root'];
-    for (const name of this.subsystemPath) {
-      breadcrumbParts.push(name);
-    }
     const breadcrumbHtml = this.subsystemPath.length > 0
       ? `<div class="breadcrumb">
           <button class="breadcrumb-btn" onclick="vscode.postMessage({command:'goToRoot'})">Root</button>
@@ -262,12 +502,16 @@ export class PlecsDiffPanel {
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .commit-labels {
-    display: flex;
-    gap: 16px;
-    font-size: 11px;
-    color: #888;
+  .change-commits-btn {
+    background: #333;
+    border: 1px solid var(--border);
+    color: var(--accent);
+    padding: 4px 10px;
+    cursor: pointer;
+    border-radius: 3px;
+    font-size: 12px;
   }
+  .change-commits-btn:hover { background: #444; }
 
   /* ── Main content ── */
   .main-content {
@@ -387,6 +631,7 @@ export class PlecsDiffPanel {
   .circuit-svg { background: white; }
   .circuit-svg .component { stroke: #222; fill: none; }
   .circuit-svg .symbol-text { fill: #222; stroke: none; }
+  .circuit-svg text { font-family: 'SF Mono', 'Menlo', 'Monaco', 'Consolas', 'Courier New', monospace; }
   .circuit-svg .comp-label { fill: #444; }
   .circuit-svg .param-label { fill: #666; }
   .circuit-svg .power-wire { stroke: #222; stroke-width: 1.5; }
@@ -441,7 +686,6 @@ export class PlecsDiffPanel {
     font-size: 16px;
   }
 
-  /* Keyboard shortcut hint */
   .shortcut-hint {
     font-size: 11px;
     color: #666;
@@ -468,7 +712,6 @@ export class PlecsDiffPanel {
   .breadcrumb-btn:hover { color: #7abcf7; }
   .breadcrumb-current { color: var(--fg); font-weight: 600; }
 
-  /* Enter subsystem button */
   .enter-sub-btn {
     background: #333;
     border: 1px solid var(--border);
@@ -487,12 +730,13 @@ export class PlecsDiffPanel {
 
 <div class="header">
   <h2>PLECS Diff</h2>
+  <button class="change-commits-btn" onclick="vscode.postMessage({command:'changeCommits'})">Change Commits</button>
   ${this.subsystemPath.length > 0 ? `<button class="nav-btn" onclick="vscode.postMessage({command:'goBack'})">&#9664; Back</button>` : ''}
   <button class="nav-btn" onclick="navigate('prev')" ${totalChanges === 0 ? 'disabled' : ''}>&#9664; Prev</button>
   <span class="change-counter">${totalChanges > 0 ? `${this.currentChangeIndex + 1} / ${totalChanges}` : 'No changes'}</span>
   <button class="nav-btn" onclick="navigate('next')" ${totalChanges === 0 ? 'disabled' : ''}>Next &#9654;</button>
   <span class="change-detail">${currentChange ? `${getChangeIcon(currentChange.type)} ${escapeHtml(currentChange.details)}` : ''}</span>
-  <span class="shortcut-hint">← → keys to navigate</span>
+  <span class="shortcut-hint">← → navigate | Esc back</span>
   <div class="zoom-bar">
     <button class="zoom-btn" onclick="zoomBy(-0.2)" title="Zoom out (-)">−</button>
     <span class="zoom-level" id="zoom-level">100%</span>
@@ -526,7 +770,6 @@ ${breadcrumbHtml}
     vscode.postMessage({ command: direction });
   }
 
-  // Click on change items → goto index
   document.querySelectorAll('.change-item').forEach(el => {
     el.addEventListener('click', (e) => {
       if (e.target.classList && e.target.classList.contains('enter-sub-btn')) return;
@@ -535,7 +778,6 @@ ${breadcrumbHtml}
     });
   });
 
-  // Click on "Enter >" buttons to drill into subsystems
   document.querySelectorAll('.enter-sub-btn').forEach(btn => {
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -544,7 +786,6 @@ ${breadcrumbHtml}
     });
   });
 
-  // ── Double-click on subsystem components to enter ──
   document.querySelectorAll('.component[data-subsystem="true"]').forEach(el => {
     el.style.cursor = 'pointer';
     el.addEventListener('dblclick', (e) => {
@@ -575,19 +816,16 @@ ${breadcrumbHtml}
     zoomLabel.textContent = Math.round(scale * 100) + '%';
   }
 
-  /** Zoom by delta, centered on a point in container coords */
   function zoomAt(delta, cx, cy) {
     const oldScale = scale;
     scale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, scale + delta));
     const ratio = scale / oldScale;
-    // Adjust pan so the point under the cursor stays fixed
     panX = cx - ratio * (cx - panX);
     panY = cy - ratio * (cy - panY);
     applyTransform();
   }
 
   function zoomBy(delta) {
-    // Zoom centered on the middle of the panel
     const rect = oldPanel.getBoundingClientRect();
     zoomAt(delta, rect.width / 2, rect.height / 2);
   }
@@ -599,7 +837,6 @@ ${breadcrumbHtml}
     applyTransform();
   }
 
-  // Fit the SVG into the panel on initial load
   function fitToView() {
     const svg = oldPanel.querySelector('svg');
     if (!svg) return;
@@ -610,33 +847,29 @@ ${breadcrumbHtml}
     const rect = oldPanel.getBoundingClientRect();
     const scaleX = rect.width / svgW;
     const scaleY = rect.height / svgH;
-    scale = Math.min(scaleX, scaleY) * 0.95; // 95% to leave a small margin
-    // Center
+    scale = Math.min(scaleX, scaleY) * 0.95;
     panX = (rect.width - svgW * scale) / 2;
     panY = (rect.height - svgH * scale) / 2;
     applyTransform();
   }
 
-  // ── Mouse wheel zoom ──
   function onWheel(e) {
     e.preventDefault();
     const rect = e.currentTarget.getBoundingClientRect();
     const cx = e.clientX - rect.left;
     const cy = e.clientY - rect.top;
     const delta = e.deltaY < 0 ? ZOOM_STEP : -ZOOM_STEP;
-    // Scale-proportional zoom so it feels consistent at any zoom level
     zoomAt(delta * scale, cx, cy);
   }
   oldPanel.addEventListener('wheel', onWheel, { passive: false });
   newPanel.addEventListener('wheel', onWheel, { passive: false });
 
-  // ── Mouse drag pan ──
   let isPanning = false;
   let startX = 0, startY = 0;
   let startPanX = 0, startPanY = 0;
 
   function onPointerDown(e) {
-    if (e.button !== 0) return; // left button only
+    if (e.button !== 0) return;
     isPanning = true;
     startX = e.clientX;
     startY = e.clientY;
@@ -665,7 +898,6 @@ ${breadcrumbHtml}
     panel.addEventListener('pointercancel', onPointerUp);
   });
 
-  // ── Keyboard navigation ──
   document.addEventListener('keydown', (e) => {
     if (e.key === 'ArrowLeft') {
       e.preventDefault();
@@ -688,7 +920,6 @@ ${breadcrumbHtml}
     }
   });
 
-  // Fit on load
   requestAnimationFrame(fitToView);
 </script>
 

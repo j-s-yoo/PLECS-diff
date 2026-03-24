@@ -333,7 +333,7 @@ function extractComponent(block: ParsedBlock): PlecsComponent {
   const compType = block.properties.get('Type') || '';
   let tagName: string | undefined;
   if (compType === 'Goto' || compType === 'From') {
-    const tagParam = params.find(p => p.variable === 'GotoTag');
+    const tagParam = params.find(p => p.variable === 'GotoTag' || p.variable === 'Tag');
     tagName = tagParam?.value || block.properties.get('Tag') || '?';
   }
 

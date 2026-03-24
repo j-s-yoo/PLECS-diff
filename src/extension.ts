@@ -1,11 +1,10 @@
 /**
  * VS Code extension entry point for PLECS Diff Viewer.
  *
- * Provides the command "PLECS Diff: Compare File Between Commits" which:
- * 1. Lets the user pick a .plecs file (or uses the current file / right-click target)
- * 2. Shows a list of git commits that touched the file
- * 3. Lets the user pick OLD and NEW commits
- * 4. Opens a side-by-side rendered diff in a webview panel
+ * Provides:
+ * - A status-bar button (like Git Graph) that opens the PLECS Diff panel
+ * - Commit selection happens *inside* the webview panel, not via quick-picks
+ * - Activates when .plecs files are found in the workspace
  */
 
 import * as vscode from 'vscode';
@@ -26,14 +25,14 @@ function exec(cmd: string, cwd: string): Promise<string> {
   });
 }
 
-interface GitCommit {
+export interface GitCommit {
   hash: string;
   shortHash: string;
   date: string;
   message: string;
 }
 
-async function getCommitsForFile(cwd: string, filePath: string): Promise<GitCommit[]> {
+export async function getCommitsForFile(cwd: string, filePath: string): Promise<GitCommit[]> {
   const relPath = path.relative(cwd, filePath);
   const log = await exec(
     `git log --pretty=format:"%H|%h|%ai|%s" -- "${relPath}"`,
@@ -49,12 +48,12 @@ async function getCommitsForFile(cwd: string, filePath: string): Promise<GitComm
     });
 }
 
-async function getFileAtCommit(cwd: string, filePath: string, commitHash: string): Promise<string> {
+export async function getFileAtCommit(cwd: string, filePath: string, commitHash: string): Promise<string> {
   const relPath = path.relative(cwd, filePath);
   return exec(`git show ${commitHash}:"${relPath}"`, cwd);
 }
 
-async function getWorkingCopy(filePath: string): Promise<string> {
+export async function getWorkingCopy(filePath: string): Promise<string> {
   const doc = await vscode.workspace.openTextDocument(filePath);
   return doc.getText();
 }
@@ -67,10 +66,9 @@ async function findPlecsFiles(cwd: string): Promise<string[]> {
   return uris.map(u => u.fsPath);
 }
 
-// ── Main command ──
+// ── Open panel (status bar button or command palette) ──
 
-async function compareCommits(uri?: vscode.Uri) {
-  // Determine workspace root
+async function openPlecsDiff(uri?: vscode.Uri) {
   const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
   if (!workspaceFolder) {
     vscode.window.showErrorMessage('No workspace folder open.');
@@ -78,13 +76,12 @@ async function compareCommits(uri?: vscode.Uri) {
   }
   const cwd = workspaceFolder.uri.fsPath;
 
-  // Determine the .plecs file to diff
+  // Determine the .plecs file
   let filePath: string | undefined;
 
   if (uri) {
     filePath = uri.fsPath;
   } else {
-    // Check active editor
     const activeEditor = vscode.window.activeTextEditor;
     if (activeEditor && activeEditor.document.fileName.endsWith('.plecs')) {
       filePath = activeEditor.document.fileName;
@@ -92,7 +89,6 @@ async function compareCommits(uri?: vscode.Uri) {
   }
 
   if (!filePath) {
-    // Let user pick a .plecs file
     const files = await findPlecsFiles(cwd);
     if (files.length === 0) {
       vscode.window.showErrorMessage('No .plecs files found in workspace.');
@@ -109,7 +105,7 @@ async function compareCommits(uri?: vscode.Uri) {
     filePath = selected.detail;
   }
 
-  // Get commits that modified this file
+  // Get commits
   let commits: GitCommit[];
   try {
     commits = await getCommitsForFile(cwd, filePath);
@@ -118,84 +114,26 @@ async function compareCommits(uri?: vscode.Uri) {
     return;
   }
 
-  if (commits.length < 1) {
-    vscode.window.showInformationMessage('No git commits found for this file.');
-    return;
-  }
-
-  // Add "Working Copy" option
-  const commitOptions = [
-    { label: '$(file) Working Copy', description: 'Current file on disk', hash: 'WORKING' },
-    ...commits.map(c => ({
-      label: `$(git-commit) ${c.shortHash}`,
-      description: `${c.date.substring(0, 10)} — ${c.message}`,
-      hash: c.hash,
-    })),
-  ];
-
-  // Pick OLD commit
-  const oldPick = await vscode.window.showQuickPick(commitOptions, {
-    placeHolder: 'Select the OLD (base) version',
-  });
-  if (!oldPick) return;
-
-  // Pick NEW commit
-  const newPick = await vscode.window.showQuickPick(commitOptions, {
-    placeHolder: 'Select the NEW (compare) version',
-  });
-  if (!newPick) return;
-
-  if (oldPick.hash === newPick.hash) {
-    vscode.window.showInformationMessage('Same version selected for both sides. Nothing to diff.');
-    return;
-  }
-
-  // Fetch file contents
-  try {
-    const oldContent = oldPick.hash === 'WORKING'
-      ? await getWorkingCopy(filePath)
-      : await getFileAtCommit(cwd, filePath, oldPick.hash);
-
-    const newContent = newPick.hash === 'WORKING'
-      ? await getWorkingCopy(filePath)
-      : await getFileAtCommit(cwd, filePath, newPick.hash);
-
-    // Parse both
-    const oldCircuit = parsePlecsFile(oldContent);
-    const newCircuit = parsePlecsFile(newContent);
-
-    // Diff
-    const diff = diffCircuits(oldCircuit, newCircuit);
-
-    // Labels
-    const oldLabel = oldPick.hash === 'WORKING' ? 'Working Copy' : `${oldPick.label.replace('$(git-commit) ', '')} (${oldPick.description})`;
-    const newLabel = newPick.hash === 'WORKING' ? 'Working Copy' : `${newPick.label.replace('$(git-commit) ', '')} (${newPick.description})`;
-
-    // Show panel
-    PlecsDiffPanel.show(
-      vscode.Uri.file(cwd),
-      diff,
-      oldLabel,
-      newLabel,
-    );
-
-    if (diff.changes.length === 0) {
-      vscode.window.showInformationMessage('No circuit differences found between the selected versions.');
-    } else {
-      vscode.window.showInformationMessage(
-        `Found ${diff.changes.length} difference(s). Use ← → keys or buttons to navigate.`,
-      );
-    }
-  } catch (err: any) {
-    vscode.window.showErrorMessage(`Error: ${err.message}`);
-  }
+  // Open the panel — commit selection happens inside the webview
+  PlecsDiffPanel.show(cwd, filePath, commits);
 }
 
 // ── Activation ──
 
 export function activate(context: vscode.ExtensionContext) {
-  const disposable = vscode.commands.registerCommand('plecsDiff.compareCommits', compareCommits);
-  context.subscriptions.push(disposable);
+  // Status bar button — always visible when extension is active
+  const statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
+  statusBarItem.text = '$(git-compare) PLECS Diff';
+  statusBarItem.tooltip = 'Open PLECS Diff Viewer';
+  statusBarItem.command = 'plecsDiff.open';
+  statusBarItem.show();
+  context.subscriptions.push(statusBarItem);
+
+  // Commands
+  context.subscriptions.push(
+    vscode.commands.registerCommand('plecsDiff.open', () => openPlecsDiff()),
+    vscode.commands.registerCommand('plecsDiff.compareCommits', (uri?: vscode.Uri) => openPlecsDiff(uri)),
+  );
 }
 
 export function deactivate() {}

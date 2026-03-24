@@ -1,0 +1,11 @@
+.claude/
+.vscode/
+.git/
+src/
+plecs_ckt/
+node_modules/
+build_extension/
+*.ts
+tsconfig.json
+build.sh
+dist/extension.js.map

@@ -2,7 +2,7 @@
   "name": "plecs-diff-viewer",
   "displayName": "PLECS Diff Viewer",
   "description": "Visual diff viewer for PLECS simulation circuit files across git commits",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "plecs-diff",
   "engines": {
     "vscode": "^1.85.0"
@@ -11,12 +11,16 @@
     "Other"
   ],
   "activationEvents": [
-    "onLanguage:plecs",
     "workspaceContains:**/*.plecs"
   ],
   "main": "./dist/extension.js",
   "contributes": {
     "commands": [
+      {
+        "command": "plecsDiff.open",
+        "title": "PLECS Diff: Open Viewer",
+        "icon": "$(git-compare)"
+      },
       {
         "command": "plecsDiff.compareCommits",
         "title": "PLECS Diff: Compare File Between Commits"
