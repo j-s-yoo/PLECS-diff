@@ -21,20 +21,17 @@ Visual diff viewer for PLECS circuit files (`.plecs`) across Git commits inside 
 ## Install (Offline VSIX)
 
 Use this method when internet access is restricted or Marketplace install is unavailable.
+Pre-compiled binary can be downloaded in the `release` tab.
 
-1. Build the VSIX package:
+### 1. Install in VS Code UI using a pre-compiled bianary:
+ 1. Open Extensions view.
+ 2. Select the `...` menu.
+ 3. Choose `Install from VSIX...`.
+ 4. Select the VSIX file from `build_extension/`.
 
-```bash
-./build.sh
-```
+You can see the detailed step in this link: [https://developer.analog.com/docs/codefusion-studio/1.1.0/user-guide/installation/install-extensions/](https://developer.analog.com/docs/codefusion-studio/1.1.0/user-guide/installation/install-extensions/)
 
-Optional: set a temporary package version for that build only:
-
-```bash
-./build.sh --version 0.2.0
-```
-
-2. Install in VS Code using command line:
+### 2. Install in VS Code using command line and a pre-compiled bianary:
 
 ```bash
 code --install-extension build_extension/<generated-file>.vsix
@@ -46,12 +43,18 @@ Example:
 code --install-extension build_extension/plecs-diff-viewer-0.2.0.vsix
 ```
 
-3. Install in VS Code UI:
+### 3. Build the VSIX package:
 
-1. Open Extensions view.
-2. Select the `...` menu.
-3. Choose `Install from VSIX...`.
-4. Select the VSIX file from `build_extension/`.
+```bash
+./build.sh
+```
+
+Optional: set a temporary package version for that build only:
+
+```bash
+./build.sh --version 0.2.0
+```
+
 
 ## How To Use
 
