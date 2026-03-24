@@ -14,13 +14,55 @@ import { parsePlecsFile } from './plecsParser';
 import { diffCircuits } from './diffEngine';
 import { PlecsDiffPanel } from './diffViewPanel';
 
+const MAX_GIT_STDOUT_BYTES = 200 * 1024 * 1024;
+
 // ── Git helpers ──
 
-function exec(cmd: string, cwd: string): Promise<string> {
+function toGitPath(cwd: string, filePath: string): string {
+  return path.relative(cwd, filePath).split(path.sep).join('/');
+}
+
+function runGit(cwd: string, args: string[]): Promise<string> {
   return new Promise((resolve, reject) => {
-    cp.exec(cmd, { cwd, maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
-      if (err) reject(new Error(stderr || err.message));
-      else resolve(stdout);
+    const child = cp.spawn('git', args, { cwd });
+    let stdout = '';
+    let stderr = '';
+    let stdoutBytes = 0;
+    let killedForLargeStdout = false;
+
+    child.stdout.on('data', chunk => {
+      const text = chunk.toString();
+      stdout += text;
+      stdoutBytes += Buffer.byteLength(text, 'utf8');
+
+      // Keep memory usage bounded for very large git output.
+      if (stdoutBytes > MAX_GIT_STDOUT_BYTES) {
+        killedForLargeStdout = true;
+        child.kill();
+      }
+    });
+
+    child.stderr.on('data', chunk => {
+      stderr += chunk.toString();
+    });
+
+    child.on('error', err => {
+      reject(err);
+    });
+
+    child.on('close', code => {
+      if (killedForLargeStdout) {
+        reject(new Error(`git stdout exceeded maxBuffer of ${MAX_GIT_STDOUT_BYTES} bytes`));
+        return;
+      }
+
+      if (code === 0) {
+        resolve(stdout);
+        return;
+      }
+
+      const msg = stderr.trim() || `git exited with code ${code}`;
+      reject(new Error(msg));
     });
   });
 }
@@ -33,11 +75,8 @@ export interface GitCommit {
 }
 
 export async function getCommitsForFile(cwd: string, filePath: string): Promise<GitCommit[]> {
-  const relPath = path.relative(cwd, filePath);
-  const log = await exec(
-    `git log --pretty=format:"%H|%h|%ai|%s" -- "${relPath}"`,
-    cwd,
-  );
+  const relPath = toGitPath(cwd, filePath);
+  const log = await runGit(cwd, ['log', '--pretty=format:%H|%h|%ai|%s', '--', relPath]);
   return log
     .trim()
     .split('\n')
@@ -49,8 +88,8 @@ export async function getCommitsForFile(cwd: string, filePath: string): Promise<
 }
 
 export async function getFileAtCommit(cwd: string, filePath: string, commitHash: string): Promise<string> {
-  const relPath = path.relative(cwd, filePath);
-  return exec(`git show ${commitHash}:"${relPath}"`, cwd);
+  const relPath = toGitPath(cwd, filePath);
+  return runGit(cwd, ['show', `${commitHash}:${relPath}`]);
 }
 
 export async function getWorkingCopy(filePath: string): Promise<string> {
