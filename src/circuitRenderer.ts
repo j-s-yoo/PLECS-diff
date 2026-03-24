@@ -113,7 +113,8 @@ function renderComponent(
   const symbol = getComponentSymbol(comp.type, tagOrName);
   const transform = getComponentTransform(comp.position, comp.direction, comp.flipped, comp.type);
   const changeClass = getAnyChangeClass(comp.name, diff);
-  const dataAttr = `data-component="${escapeXml(comp.name)}"`;
+  const isSubsystem = !!comp.subCircuit;
+  const dataAttr = `data-component="${escapeXml(comp.name)}"${isSubsystem ? ' data-subsystem="true"' : ''}`;
 
   // Build parameter label
   const visibleParams = comp.parameters.filter(p => p.show === 'on');

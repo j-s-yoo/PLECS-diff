@@ -220,14 +220,32 @@ export function diffCircuits(
     ...compareSimParams(oldCircuit.simParams, newCircuit.simParams),
   ];
 
-  // Build recursive subsystem diffs
+  // Build recursive subsystem diffs (include ALL subsystems, not just matching pairs)
   const subDiffs = new Map<string, DiffResult>();
   const oldMap = new Map(oldCircuit.components.map(c => [c.name, c]));
   const newMap = new Map(newCircuit.components.map(c => [c.name, c]));
+
+  const emptyCircuit: PlecsCircuit = {
+    name: '', version: '', schematicLocation: [0, 0, 0, 0],
+    components: [], connections: [], annotations: [], simParams: {},
+  };
+
+  // Subsystems present in both old and new
   for (const [name, newComp] of newMap) {
     const oldComp = oldMap.get(name);
     if (oldComp?.subCircuit && newComp.subCircuit) {
       const subDiff = diffCircuits(oldComp.subCircuit, newComp.subCircuit, [...subsystemPath, name]);
+      subDiffs.set(name, subDiff);
+    } else if (newComp.subCircuit && !oldComp?.subCircuit) {
+      // Subsystem only in new (added or newly has sub-circuit)
+      const subDiff = diffCircuits(emptyCircuit, newComp.subCircuit, [...subsystemPath, name]);
+      subDiffs.set(name, subDiff);
+    }
+  }
+  // Subsystems only in old (removed)
+  for (const [name, oldComp] of oldMap) {
+    if (oldComp.subCircuit && !newMap.get(name)?.subCircuit) {
+      const subDiff = diffCircuits(oldComp.subCircuit, emptyCircuit, [...subsystemPath, name]);
       subDiffs.set(name, subDiff);
     }
   }

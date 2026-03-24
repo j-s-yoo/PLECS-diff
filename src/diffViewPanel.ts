@@ -168,6 +168,19 @@ export class PlecsDiffPanel {
       })
       .join('');
 
+    // Build subsystem list from subDiffs (includes subsystems with no changes)
+    const subsystemNames = Array.from(diff.subDiffs.keys());
+    const subsystemsInChangeList = new Set(
+      diff.changes.filter(c => c.type === 'subsystem-changed').map(c => c.componentName),
+    );
+    const additionalSubsystems = subsystemNames.filter(n => !subsystemsInChangeList.has(n));
+    const subsystemListHtml = additionalSubsystems.length > 0
+      ? `<div class="sidebar-header" style="font-size:12px;">Subsystems</div>` +
+        additionalSubsystems.map(name =>
+          `<div class="change-item change-subsystem-nav">📂 <strong>${escapeHtml(name)}</strong> <button class="enter-sub-btn" data-name="${escapeHtml(name)}">Enter &gt;</button></div>`
+        ).join('')
+      : '';
+
     // Breadcrumb for subsystem navigation
     const breadcrumbParts = ['Root'];
     for (const name of this.subsystemPath) {
@@ -502,6 +515,7 @@ ${breadcrumbHtml}
   <div class="sidebar">
     <div class="sidebar-header">Changes (${totalChanges})</div>
     ${totalChanges > 0 ? changeListHtml : '<div class="no-changes">No differences found</div>'}
+    ${subsystemListHtml}
   </div>
 </div>
 
@@ -527,6 +541,16 @@ ${breadcrumbHtml}
       e.stopPropagation();
       const name = btn.dataset.name;
       vscode.postMessage({ command: 'enterSub', name: name });
+    });
+  });
+
+  // ── Double-click on subsystem components to enter ──
+  document.querySelectorAll('.component[data-subsystem="true"]').forEach(el => {
+    el.style.cursor = 'pointer';
+    el.addEventListener('dblclick', (e) => {
+      e.stopPropagation();
+      const name = el.getAttribute('data-component');
+      if (name) vscode.postMessage({ command: 'enterSub', name: name });
     });
   });
 
