@@ -72,7 +72,7 @@ npm --prefix "$SCRIPT_DIR" run build -- --minify
 
 # Package as VSIX
 echo "Packaging VSIX..."
-npx @vscode/vsce package --allow-missing-repository --out "$OUTPUT_DIR/"
+npx @vscode/vsce package --allow-missing-repository --readme-path "README.md" --out "$OUTPUT_DIR/"
 
 VSIX_FILE=$(ls "$OUTPUT_DIR"/*.vsix 2>/dev/null | head -1)
 echo ""
